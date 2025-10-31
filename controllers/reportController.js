@@ -1,6 +1,8 @@
 const Report = require('../models/Report');
 const Collection = require('../models/Collection');
 const User = require('../models/user.js');
+const PDFDocument = require('pdfkit');
+const XLSX = require('xlsx');
 
 // @desc    Get all reports
 // @route   GET /api/reports
@@ -331,6 +333,142 @@ exports.getStats = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Server error',
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Export reports to PDF
+// @route   GET /api/reports/export/pdf
+// @access  Private/Admin
+exports.exportReportsPDF = async (req, res) => {
+  try {
+    const reports = await Report.find()
+      .populate('reportedBy', 'name email phone')
+      .sort('-createdAt');
+
+    const doc = new PDFDocument({ margin: 50 });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename=reports-report.pdf');
+
+    doc.pipe(res);
+
+    // Title
+    doc.fontSize(20).text('Waste Management Reports', { align: 'center' });
+    doc.moveDown();
+    doc.fontSize(10).text(`Generated on: ${new Date().toLocaleDateString()}`, { align: 'center' });
+    doc.moveDown(2);
+
+    // Summary
+    doc.fontSize(14).text('Summary', { underline: true });
+    doc.moveDown(0.5);
+    doc.fontSize(10);
+    doc.text(`Total Reports: ${reports.length}`);
+    doc.text(`Open: ${reports.filter(r => r.status === 'open').length}`);
+    doc.text(`In Progress: ${reports.filter(r => r.status === 'in-progress').length}`);
+    doc.text(`Resolved: ${reports.filter(r => r.status === 'resolved').length}`);
+    doc.text(`Closed: ${reports.filter(r => r.status === 'closed').length}`);
+    doc.moveDown(2);
+
+    // Reports Details
+    doc.fontSize(14).text('Reports Details', { underline: true });
+    doc.moveDown();
+
+    reports.forEach((report, index) => {
+      if (doc.y > 700) {
+        doc.addPage();
+      }
+
+      doc.fontSize(12).text(`${index + 1}. Report #${report._id.toString().slice(-6)}`, { bold: true });
+      doc.fontSize(10);
+      doc.text(`Type: ${report.type}`);
+      doc.text(`Title: ${report.title}`);
+      doc.text(`Status: ${report.status}`);
+      doc.text(`Priority: ${report.priority}`);
+      doc.text(`Reporter: ${report.reportedBy?.name || 'N/A'} (${report.reportedBy?.email || 'N/A'})`);
+      doc.text(`Location: ${report.location.street}, ${report.location.city}`);
+      doc.text(`Zone: ${report.zone || 'N/A'}`);
+      doc.text(`Description: ${report.description || 'N/A'}`);
+      doc.text(`Created: ${new Date(report.createdAt).toLocaleDateString()}`);
+      doc.moveDown();
+    });
+
+    doc.end();
+  } catch (error) {
+    console.error('Export PDF error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to export PDF',
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Export reports to Excel
+// @route   GET /api/reports/export/excel
+// @access  Private/Admin
+exports.exportReportsExcel = async (req, res) => {
+  try {
+    const reports = await Report.find()
+      .populate('reportedBy', 'name email phone')
+      .sort('-createdAt');
+
+    // Prepare data for Excel
+    const excelData = reports.map((report, index) => ({
+      'No.': index + 1,
+      'Report ID': report._id.toString().slice(-8),
+      'Type': report.type,
+      'Title': report.title,
+      'Status': report.status,
+      'Priority': report.priority,
+      'Reporter Name': report.reportedBy?.name || 'N/A',
+      'Reporter Email': report.reportedBy?.email || 'N/A',
+      'Reporter Phone': report.reportedBy?.phone || 'N/A',
+      'Street': report.location.street,
+      'City': report.location.city,
+      'Zone': report.zone || 'N/A',
+      'Description': report.description || 'N/A',
+      'Created Date': new Date(report.createdAt).toLocaleDateString(),
+      'Last Updated': new Date(report.updatedAt).toLocaleDateString(),
+    }));
+
+    // Create workbook and worksheet
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(excelData);
+
+    // Set column widths
+    ws['!cols'] = [
+      { wch: 5 },  // No
+      { wch: 15 }, // Report ID
+      { wch: 20 }, // Type
+      { wch: 30 }, // Title
+      { wch: 12 }, // Status
+      { wch: 10 }, // Priority
+      { wch: 20 }, // Reporter Name
+      { wch: 25 }, // Reporter Email
+      { wch: 15 }, // Reporter Phone
+      { wch: 30 }, // Street
+      { wch: 15 }, // City
+      { wch: 15 }, // Zone
+      { wch: 40 }, // Description
+      { wch: 15 }, // Created Date
+      { wch: 15 }, // Last Updated
+    ];
+
+    XLSX.utils.book_append_sheet(wb, ws, 'Reports');
+
+    // Generate buffer
+    const excelBuffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=reports-report.xlsx');
+    res.send(excelBuffer);
+  } catch (error) {
+    console.error('Export Excel error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to export Excel',
       error: error.message,
     });
   }

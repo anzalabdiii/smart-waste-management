@@ -1,4 +1,6 @@
 const Collection = require('../models/Collection');
+const PDFDocument = require('pdfkit');
+const XLSX = require('xlsx');
 
 // @desc    Get all collections
 // @route   GET /api/collections
@@ -341,6 +343,148 @@ exports.assignCollector = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Server error',
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Export collections to PDF
+// @route   GET /api/collections/export/pdf
+// @access  Private/Admin
+exports.exportCollectionsPDF = async (req, res) => {
+  try {
+    const collections = await Collection.find()
+      .populate('resident', 'name email phone')
+      .populate('collector', 'name email')
+      .sort('-createdAt');
+
+    const doc = new PDFDocument({ margin: 50 });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename=collections-report.pdf');
+
+    doc.pipe(res);
+
+    // Title
+    doc.fontSize(20).text('Waste Collections Report', { align: 'center' });
+    doc.moveDown();
+    doc.fontSize(10).text(`Generated on: ${new Date().toLocaleDateString()}`, { align: 'center' });
+    doc.moveDown(2);
+
+    // Summary
+    doc.fontSize(14).text('Summary', { underline: true });
+    doc.moveDown(0.5);
+    doc.fontSize(10);
+    doc.text(`Total Collections: ${collections.length}`);
+    doc.text(`Pending: ${collections.filter(c => c.status === 'pending').length}`);
+    doc.text(`Assigned: ${collections.filter(c => c.status === 'assigned').length}`);
+    doc.text(`In Progress: ${collections.filter(c => c.status === 'in-progress').length}`);
+    doc.text(`Completed: ${collections.filter(c => c.status === 'completed').length}`);
+    doc.moveDown(2);
+
+    // Collections Table
+    doc.fontSize(14).text('Collections Details', { underline: true });
+    doc.moveDown();
+
+    collections.forEach((collection, index) => {
+      if (doc.y > 700) {
+        doc.addPage();
+      }
+
+      doc.fontSize(12).text(`${index + 1}. Collection #${collection._id.toString().slice(-6)}`, { bold: true });
+      doc.fontSize(10);
+      doc.text(`Type: ${collection.wasteType || 'General'}`);
+      doc.text(`Status: ${collection.status}`);
+      doc.text(`Resident: ${collection.resident?.name || 'N/A'} (${collection.resident?.email || 'N/A'})`);
+      doc.text(`Collector: ${collection.collector?.name || 'Not Assigned'}`);
+      doc.text(`Address: ${collection.address.street}, ${collection.address.city}`);
+      doc.text(`Zone: ${collection.zone || 'N/A'}`);
+      doc.text(`Scheduled Date: ${collection.scheduledDate ? new Date(collection.scheduledDate).toLocaleDateString() : 'Not Set'}`);
+      doc.text(`Created: ${new Date(collection.createdAt).toLocaleDateString()}`);
+      doc.moveDown();
+    });
+
+    doc.end();
+  } catch (error) {
+    console.error('Export PDF error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to export PDF',
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Export collections to Excel
+// @route   GET /api/collections/export/excel
+// @access  Private/Admin
+exports.exportCollectionsExcel = async (req, res) => {
+  try {
+    const collections = await Collection.find()
+      .populate('resident', 'name email phone')
+      .populate('collector', 'name email')
+      .sort('-createdAt');
+
+    // Prepare data for Excel
+    const excelData = collections.map((collection, index) => ({
+      'No.': index + 1,
+      'Collection ID': collection._id.toString().slice(-8),
+      'Waste Type': collection.wasteType || 'General',
+      'Status': collection.status,
+      'Resident Name': collection.resident?.name || 'N/A',
+      'Resident Email': collection.resident?.email || 'N/A',
+      'Resident Phone': collection.resident?.phone || 'N/A',
+      'Collector': collection.collector?.name || 'Not Assigned',
+      'Collector Email': collection.collector?.email || 'N/A',
+      'Street': collection.address.street,
+      'City': collection.address.city,
+      'County': collection.address.state,
+      'Zone': collection.zone || 'N/A',
+      'Description': collection.description || 'N/A',
+      'Scheduled Date': collection.scheduledDate ? new Date(collection.scheduledDate).toLocaleDateString() : 'Not Set',
+      'Completed Date': collection.completedDate ? new Date(collection.completedDate).toLocaleDateString() : 'Not Completed',
+      'Created Date': new Date(collection.createdAt).toLocaleDateString(),
+      'Last Updated': new Date(collection.updatedAt).toLocaleDateString(),
+    }));
+
+    // Create workbook and worksheet
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(excelData);
+
+    // Set column widths
+    ws['!cols'] = [
+      { wch: 5 },  // No
+      { wch: 15 }, // Collection ID
+      { wch: 12 }, // Type
+      { wch: 12 }, // Status
+      { wch: 20 }, // Resident Name
+      { wch: 25 }, // Resident Email
+      { wch: 15 }, // Resident Phone
+      { wch: 20 }, // Collector
+      { wch: 25 }, // Collector Email
+      { wch: 30 }, // Street
+      { wch: 15 }, // City
+      { wch: 15 }, // County
+      { wch: 15 }, // Zone
+      { wch: 30 }, // Waste Description
+      { wch: 15 }, // Preferred Date
+      { wch: 15 }, // Created Date
+      { wch: 15 }, // Last Updated
+    ];
+
+    XLSX.utils.book_append_sheet(wb, ws, 'Collections');
+
+    // Generate buffer
+    const excelBuffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=collections-report.xlsx');
+    res.send(excelBuffer);
+  } catch (error) {
+    console.error('Export Excel error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to export Excel',
       error: error.message,
     });
   }

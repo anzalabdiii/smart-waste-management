@@ -7,10 +7,16 @@ const {
   updateReport,
   deleteReport,
   getStats,
+  exportReportsPDF,
+  exportReportsExcel,
 } = require('../controllers/reportController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 
 router.use(protect);
+
+// Export routes (must be before /:id routes)
+router.get('/export/pdf', authorize('admin'), exportReportsPDF);
+router.get('/export/excel', authorize('admin'), exportReportsExcel);
 
 router.get('/stats', authorize('admin'), getStats);
 
